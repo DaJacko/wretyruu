@@ -1,0 +1,603 @@
+local global = (type(getgenv) == "function" and getgenv()) or _G
+if type(hookfunction) ~= "function" then
+	return
+end
+
+local Game = game
+local ReplicatedStorage = Game:GetService("ReplicatedStorage")
+if global.__assetContainerEmulatorInstalled == ReplicatedStorage then
+	-- A second install must not invoke AssetContainer while the game is loading.
+	local oldStatus = global.__assetContainerEmulatorStatus
+	if not oldStatus or oldStatus.revision ~= "runtime-require-4" then
+		local message = "An older AssetContainer emulator is already installed; restart Roblox to load runtime-require-4"
+		global.__assetContainerEmulatorInstallError = message
+		warn(message)
+	end
+	return
+end
+local CollectionService = Game:GetService("CollectionService")
+local Players = Game:GetService("Players")
+if type(rconsoleshow) == "function" then
+	pcall(rconsoleshow)
+end
+if type(rconsolename) == "function" then
+	pcall(rconsolename, "bredhaxx emulator")
+end
+local function consoleLine(message)
+	if type(rconsoleprint) == "function" then
+		pcall(rconsoleprint, message, false, true)
+	end
+end
+local UserId = nil
+local status = {
+	revision = "runtime-require-4",
+	intercepts = 0,
+	remotesReady = false,
+	heartbeatAttempts = 0,
+	heartbeatCalls = 0,
+	lastError = nil,
+	phase = "waiting for AssetContainer require",
+	discoveryMode = nil,
+}
+global.__assetContainerEmulatorStatus = status
+local modules = ReplicatedStorage:FindFirstChild("Modules")
+local asset = modules and modules:FindFirstChild("AssetContainer")
+if asset and type(getloadedmodules) == "function" then
+	local listed, loadedModules = pcall(getloadedmodules)
+	if listed and type(loadedModules) == "table" then
+		for _, module in loadedModules do
+			if module == asset then
+				status.preloaded = true
+				status.phase = "failed"
+				status.lastError = "AssetContainer loaded before emulator installation; restart and install earlier"
+				consoleLine("[Emulator] " .. status.lastError)
+				warn(status.lastError)
+				return
+			end
+		end
+	end
+end
+local function displayValue(value, depth)
+	local kind = typeof(value)
+	if kind == "string" then
+		return string.format("%q", value)
+	elseif kind == "buffer" then
+		local length = buffer.len(value)
+		local bytes = {}
+		for offset = 0, math.min(length, 512) - 1 do
+			bytes[#bytes + 1] = string.format("%02X", buffer.readu8(value, offset))
+		end
+		return string.format("buffer[%d] %s%s", length, table.concat(bytes, " "), length > 512 and " ... (truncated)" or "")
+	elseif kind == "Instance" then
+		return value:GetFullName()
+	elseif kind == "table" and depth < 2 then
+		local entries = {}
+		for key, item in next, value do
+			if #entries >= 16 then
+				entries[#entries + 1] = "... (truncated)"
+				break
+			end
+			entries[#entries + 1] = "[" .. displayValue(key, depth + 1) .. "]=" .. displayValue(item, depth + 1)
+		end
+		return "{" .. table.concat(entries, ", ") .. "}"
+	end
+	return tostring(value)
+end
+
+local function logSend(remote, groupName, remoteName, arguments, first, second)
+	pcall(function()
+		local values = {}
+		for index = 1, arguments.n do
+			values[index] = string.format("[%d]=%s", index, displayValue(arguments[index], 0))
+		end
+		consoleLine("[AssetContainer SEND] " .. remote:GetFullName() .. " (" .. remote.ClassName .. ")")
+		consoleLine("[AssetContainer ROUTE] group=" .. displayValue(groupName, 0) .. " remote=" .. displayValue(remoteName, 0))
+		consoleLine("[AssetContainer VALUES] " .. table.concat(values, ", "))
+		consoleLine("[AssetContainer WIRE] arg1=" .. displayValue(first, 0) .. " arg2=" .. displayValue(second, 0))
+	end)
+end
+local V28 = CollectionService
+local V46 = 1000
+local V49 = 32767
+local V50 = 2147483647
+local V9 = nil
+local V82 = nil
+local V10 = nil
+local V81 = 0
+
+local function Fn5(value)
+	return typeof(value)
+end
+
+local typeCodes = {
+	string = 0,
+	number = 1,
+	Vector2 = 2,
+	Vector3 = 3,
+	Instance = 4,
+	CFrame = 5,
+	Color3 = 6,
+}
+local function Fn6(value)
+	return typeCodes[typeof(value)]
+end
+
+local function Fn19(Arg1)
+	local V = math.abs(Arg1)
+	return math.abs(math.round(Arg1) - Arg1) <= 1e-05, V <= V49, V <= V50
+end
+local function Fn20(Arg1)
+	local V = 9
+	for Index2 = 1, math.max(table.maxn(Arg1), 1) do
+		V += 1
+		local V2 = Arg1[Index2]
+		if V2 ~= nil and V2 ~= false and V2 ~= true then
+			local V3 = Fn6(V2)
+			if V3 == 0 then
+				V += math.min(#V2, V46) + 2
+			elseif V3 == 1 then
+				local V4, V5, V6 = Fn19(V2)
+				if V4 and V6 then
+					if V5 then
+						V += 2
+					else
+						V += 4
+					end
+				else
+					V += 8
+				end
+			elseif V3 == 2 or V3 == 3 then
+				V += 4 * V3
+			elseif V3 == 4 then
+				local V7
+				for Key, Value in V28:GetTags(V2) do
+					if #Value == 36 then
+						V7 = Value:gsub("-", "")
+					end
+				end
+				if V7 and #V7 == 32 then
+					V += 32
+				end
+			elseif V3 == 5 then
+				V += 18
+			elseif V3 == 6 then
+				V += 3
+			end
+		end
+	end
+	return V
+end
+local function Fn21(Arg1, Arg2, Arg3, Arg4)
+	if Arg1 == true then
+		buffer.writeu8(Arg2, Arg3, 4)
+	elseif Arg1 == false then
+		buffer.writeu8(Arg2, Arg3, 5)
+	elseif Arg1 == nil then
+		buffer.writeu8(Arg2, Arg3, 6)
+	else
+		local V = Fn5(Arg1)
+		if V == "string" then
+			buffer.writeu8(Arg2, Arg3, 0)
+			local V2 = Arg1:sub(1, 1000)
+			local V3 = #V2
+			buffer.writeu16(Arg2, Arg3 + 1, V3)
+			if 0 < V3 then
+				buffer.writestring(Arg2, Arg3 + 3, V2)
+			end
+			Arg3 = Arg3 + (2 + V3)
+		elseif V == "number" then
+			local V4, V5, V6 = Fn19(Arg1)
+			local V7
+			if not Arg4 then
+				if not V4 or not V6 then
+					V7 = 3
+				elseif not V5 then
+					V7 = 2
+				else
+					V7 = 1
+				end
+			else
+				V7 = 12
+			end
+			buffer.writeu8(Arg2, Arg3, V7)
+			if V7 ~= 1 then
+				if V7 == 2 then
+					buffer.writei32(Arg2, Arg3 + 1, Arg1)
+				else
+					buffer.writef64(Arg2, Arg3 + 1, Arg1)
+				end
+			else
+				buffer.writei16(Arg2, Arg3 + 1, Arg1)
+			end
+			local V8
+			if not Arg4 then
+				V8 = 2 ^ V7
+			else
+				V8 = 8
+			end
+			Arg3 = Arg3 + V8
+		elseif V == "Instance" then
+			local V9 = nil
+			for _2, Value in V28:GetTags(Arg1) do
+				if #Value == 36 then
+					V9 = Value:gsub("-", "")
+				end
+			end
+			if not V9 or #V9 ~= 32 then
+				buffer.writeu8(Arg2, Arg3, 6)
+			else
+				buffer.writeu8(Arg2, Arg3, 7)
+				buffer.writestring(Arg2, Arg3 + 1, V9)
+				Arg3 = Arg3 + 32
+			end
+		elseif V == "Vector2" or V == "Vector3" then
+			local V10
+			if V == "Vector3" then
+				V10 = 8
+			else
+				V10 = 9
+			end
+			buffer.writeu8(Arg2, Arg3, V10)
+			buffer.writef32(Arg2, Arg3 + 1, Arg1.X)
+			buffer.writef32(Arg2, Arg3 + 5, Arg1.Y)
+			if V10 ~= 8 then
+				Arg3 = Arg3 + 8
+			else
+				buffer.writef32(Arg2, Arg3 + 9, Arg1.Z)
+				Arg3 = Arg3 + 12
+			end
+		elseif V == "CFrame" then
+			buffer.writeu8(Arg2, Arg3, 10)
+			buffer.writef32(Arg2, Arg3 + 1, Arg1.X)
+			buffer.writef32(Arg2, Arg3 + 5, Arg1.Y)
+			buffer.writef32(Arg2, Arg3 + 9, Arg1.Z)
+			for Key, Value2 in {Arg1:ToEulerAnglesXYZ()} do
+				buffer.writei16(Arg2, Arg3 + 13 + 2 * (Key - 1), math.round(Value2 * 10000))
+			end
+			Arg3 = Arg3 + 18
+		else
+			if V ~= "Color3" then
+				return
+			end
+			buffer.writeu8(Arg2, Arg3, 11)
+			for Key2, Value3 in {"R", "G", "B"} do
+				buffer.writeu8(Arg2, Arg3 + Key2, math.round(Arg1[Value3] * 255))
+			end
+			Arg3 = Arg3 + 3
+		end
+	end
+	return Arg3 + 1
+end
+local function Fn22(Arg1, ...)
+	local V = workspace:GetServerTimeNow() // 1
+	local V2 = {...}
+	local V3 = V2[7] ~= nil
+	if not V82 or not Arg1 then
+		if V9 and Arg1 then
+			V9[1] = {V9[1]}
+			V2 = table.move(V9, 1, #V9, #V2 + 1, V2)
+			table.clear(V9)
+			V10 = true
+			V9 = nil
+		end
+	else
+		V2 = table.move(V82, 1, #V82, #V2 + 1, V2)
+		table.clear(V82)
+		V82 = false
+	end
+	local V4 = math.random(1, 64)
+	local V5 = Fn20(V2)
+	local V6 = V4 + math.round(V5 + 0.01)
+	local V7 = buffer.fromstring(string.rep("\1", V6))
+	buffer.writeu8(V7, 0, V4)
+	if 1 < V4 then
+		buffer.fill(V7, 1, math.random(0, 255), V4 - 1)
+	end
+	local V8 = V4
+	local V11 = math.clamp(table.maxn(V2), 1, 15)
+	local V12 = math.random(1, V11)
+	local V13 = math.round(os.clock() * 100) % 65536
+	local V14 = Random.new(math.round((UserId + V81 + V6 + V13) * 2))
+	local V15 = V14:NextInteger(0, V6 - 1)
+	for Index = 1, V11 do
+		local V16 = 1
+		local V17
+		if V12 ~= Index then
+			V17 = 1
+		else
+			V17 = 2
+		end
+		for Index2 = V16, V17 do
+			local V18 = Index2 == 2
+			local V19
+			if not V18 then
+				V19 = V2[Index]
+			else
+				V19 = V
+			end
+			local V20
+			if Index ~= 1 or Index2 ~= 1 then
+				V20 = V8
+			else
+				V20 = 0
+			end
+			local V21 = Fn21(V19, V7, V8, V18)
+			if V21 then
+				V8 = V21
+			else
+				local V22, V23 = pcall(function()
+					return V19[1]
+				end)
+				local Writeu8 = buffer.writeu8
+				local V24 = V7
+				local V25 = V8
+				local V26
+				if not V22 or not V23 then
+					V26 = 13
+				else
+					V26 = 12 + V23
+				end
+				Writeu8(V24, V25, V26)
+				V8 = V8 + 1
+			end
+			for Index3 = V20, V8 - 1 do
+				local V27 = (buffer.readu8(V7, Index3) + V14:NextInteger(0, 255)) % 256
+				buffer.writeu8(V7, Index3, V27)
+			end
+		end
+	end
+	local V28 = buffer.fromstring(string.rep("\1", V6 + 2))
+	for Index4 = 0, V6 - 1 do
+		buffer.writeu8(V28, (V15 + Index4) % V6, buffer.readu8(V7, Index4))
+	end
+	buffer.fill(V7, 0, 0, V6)
+	buffer.writeu16(V28, V6, V13)
+	table.clear(V2)
+	return V28, V3
+end
+
+local reportGroup = "C\233\147\186\243\221\172\1J\189N\129\236\240-(\186a\197\171"
+local reportName = "\179\"\213\187\234\245\184\190\253l\206\180\220~\1M\t\133.\23"
+local wrapperKey = newproxy(true)
+getmetatable(wrapperKey).__tostring = function()
+	return ""
+end
+local remoteGroups = {}
+local subscriptions = {}
+local ready = false
+local started = false
+local discoveryFailed = false
+
+local function checksum(value)
+	local sum = 0
+	for index = 1, #value do
+		sum += string.byte(value, index)
+	end
+	return sum
+end
+
+local function discoverRemotes()
+	local deadline = os.clock() + 30
+	local function waitStep(reason)
+		status.phase = reason
+		if os.clock() >= deadline then error("Remote discovery timed out: " .. reason) end
+		task.wait(0.1)
+	end
+	local player = Players.LocalPlayer
+	while not player do
+		waitStep("waiting for player")
+		player = Players.LocalPlayer
+	end
+	UserId = player.UserId
+	local jobId = Game.JobId
+	while jobId == "" do
+		waitStep("waiting for server job")
+		jobId = Game.JobId
+	end
+	for character in jobId:gmatch("[^-]") do
+		V81 += tonumber(character, 16)
+	end
+	local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+	while not remotes do
+		waitStep("waiting for Remotes folder")
+		remotes = ReplicatedStorage:FindFirstChild("Remotes")
+	end
+	local tagged, tag, usedFallback
+	local fallbackAt = os.clock() + 2
+	repeat
+		local firstFunction = remotes:FindFirstChildWhichIsA("RemoteFunction", true)
+		tag = firstFunction and firstFunction:GetTags()[1]
+		local taggedByTag = type(tag) == "string" and CollectionService:GetTagged(tag) or {}
+		if #taggedByTag >= 36 then
+			tagged = taggedByTag
+			status.discoveryMode = "tagged"
+			break
+		end
+		local candidates = {}
+		for _, item in remotes:GetDescendants() do
+			if item:IsA("RemoteEvent") or item:IsA("RemoteFunction") then
+				candidates[#candidates + 1] = item
+			end
+		end
+		if #candidates >= 36 and os.clock() >= fallbackAt then
+			tagged = candidates
+			usedFallback = true
+			status.discoveryMode = "folder"
+			break
+		end
+		waitStep("waiting for remotes (tagged " .. #taggedByTag .. ", folder " .. #candidates .. ")")
+	until false
+
+	for _, remote in tagged do
+		local parent = remote.Parent
+		if parent then
+			local groupHash = checksum(parent.Name)
+			local nameHash = checksum(remote.Name)
+			local group = remoteGroups[groupHash]
+			if not group then
+				group = {}
+				remoteGroups[groupHash] = group
+			end
+			if remote:IsA("RemoteFunction") then
+				group[-nameHash] = remote
+			else
+				group[nameHash] = remote
+			end
+			if not usedFallback then remote:RemoveTag(tag) end
+		end
+	end
+	ready = true
+	status.remotesReady = true
+	status.phase = "ready"
+	consoleLine("[Emulator] remotes ready via " .. tostring(status.discoveryMode))
+end
+
+local function waitForRemotes()
+	while not ready and not discoveryFailed do
+		task.wait()
+	end
+	return ready
+end
+
+local function send(groupName, remoteName, ...)
+	if not waitForRemotes() then
+		return
+	end
+	local group = remoteGroups[checksum(groupName)]
+	if not group then
+		return
+	end
+	local nameHash = checksum(remoteName)
+	local remote = group[nameHash]
+	local payload
+	if nameHash == 2876 or nameHash == 1941 then
+		payload = {...}
+	else
+		payload = Fn22(remote ~= nil, ...)
+	end
+
+	local lastDigit = string.match(("%*"):format(os.clock()), "%d$")
+	local wrapped = if lastDigit == "0" or lastDigit == "2" then {[wrapperKey] = payload} else payload
+	local first, second
+	if tonumber(lastDigit) % 2 == 0 then
+		first = wrapped
+	else
+		second = wrapped
+	end
+
+	if remote then
+		logSend(remote, groupName, remoteName, table.pack(...), first, second)
+		remote:FireServer(first, second)
+	else
+		local remoteFunction = group[-nameHash]
+		if remoteFunction then
+			logSend(remoteFunction, groupName, remoteName, table.pack(...), first, second)
+			return remoteFunction:InvokeServer(first, second)
+		end
+	end
+end
+
+local function api(operation, groupName, remoteName, ...)
+	if operation == "Fire" then
+		return send(groupName, remoteName, ...)
+	end
+	if operation == "Setup" then
+		if not waitForRemotes() then
+			return
+		end
+		local group = remoteGroups[checksum(groupName)]
+		local remote = group and group[checksum(remoteName)]
+		if remote then
+			local callbacks = subscriptions[groupName]
+			if not callbacks then
+				callbacks = {}
+				subscriptions[groupName] = callbacks
+			end
+			local previous = callbacks[remoteName]
+			if previous then
+				previous:Disconnect()
+			end
+			callbacks[remoteName] = remote.OnClientEvent:Connect(...)
+		end
+	end
+end
+
+local function start()
+	if started then
+		return
+	end
+	started = true
+	status.phase = "discovering remotes"
+	task.spawn(function()
+		local discovered, discoveryError = pcall(discoverRemotes)
+		if not discovered then
+			status.lastError = tostring(discoveryError)
+			status.phase = "failed"
+			consoleLine("[Emulator] " .. status.lastError)
+			discoveryFailed = true
+			return
+		end
+		local loadWaitStarted = os.clock()
+		while not Game:IsLoaded() and os.clock() - loadWaitStarted <= 45 do
+			task.wait(0.1)
+		end
+		while true do
+			status.heartbeatAttempts += 1
+			local group = remoteGroups[checksum(reportGroup)]
+			if not group or not group[checksum(reportName)] then
+				status.lastError = "heartbeat remote missing"
+			else
+				local sent, sendError = pcall(send, reportGroup, reportName, os.clock())
+				if sent then
+					status.heartbeatCalls += 1
+				else
+					status.lastError = tostring(sendError)
+				end
+			end
+			task.wait(10)
+		end
+	end)
+end
+
+local function isTarget(module)
+	if typeof(module) ~= "Instance" or not module:IsA("ModuleScript") or module.Name ~= "AssetContainer" then
+		return false
+	end
+	local parent = module.Parent
+	return parent ~= nil and parent.Name == "Modules" and parent.Parent == ReplicatedStorage
+end
+
+local function factory(...)
+	return api
+end
+
+local runtime = type(getrenv) == "function" and getrenv() or nil
+local runtimeRequire = runtime and runtime.require
+if type(runtimeRequire) ~= "function" then
+	status.phase = "failed"
+	status.lastError = "The executor cannot access Roblox's runtime require"
+	consoleLine("[Emulator] " .. status.lastError)
+	warn(status.lastError)
+	return
+end
+local originalRequire
+local ok, result = pcall(hookfunction, runtimeRequire, function(module, ...)
+	if isTarget(module) then
+		status.intercepts += 1
+		consoleLine("[Emulator] AssetContainer intercepted")
+		start()
+		return factory
+	end
+	return originalRequire(module, ...)
+end)
+if ok and type(result) == "function" then
+	originalRequire = result
+	global.__assetContainerEmulatorInstalled = ReplicatedStorage
+	global.__assetContainerEmulatorNetwork = api
+	status.requireSource = "runtime"
+	consoleLine("[Emulator] runtime require hooked; waiting for AssetContainer")
+else
+	status.lastError = if ok then "hookfunction returned no original" else tostring(result)
+	status.phase = "failed"
+	consoleLine("[Emulator] " .. status.lastError)
+end
