@@ -21,7 +21,7 @@ if type(rconsoleshow) == "function" then
 	pcall(rconsoleshow)
 end
 if type(rconsolename) == "function" then
-	pcall(rconsolename, "bredhaxx emulator")
+	pcall(rconsolename, "faggotguard emulator - jacko")
 end
 local function consoleLine(message)
 	if type(rconsoleprint) == "function" then
